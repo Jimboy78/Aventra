@@ -1,414 +1,215 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { GameState, LLMOutput } from "@/types/game";
-import { GameMenuAction } from "@/types/api";
-import { GameSetup, GamePlay, GameStateViewer } from "@/components/game";
-import GameMenu from "@/components/game/GameMenu";
-import SaveGameModal from "@/components/game/SaveGameModal";
-import LoadGameModal from "@/components/game/LoadGameModal";
-import NotificationSystem, { useNotifications } from "@/components/game/NotificationSystem";
-import { useSaveSystem } from "@/hooks/useSaveSystem";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { Logo } from "@/components/Logo";
+import { DemoCard } from "@/components/screens/DemoScreen";
+import { loadDemoIndex, type DemoMeta } from "@/lib/game/demos";
+import type { Adventure } from "@/lib/engine/types";
+import { db, exportBundle, importBundle, listeners } from "@/lib/store/db";
+import { downloadJson, fileSlug } from "@/lib/store/download";
 
-type GamePhase = "menu" | "setup" | "playing" | "game-over";
+const FEATURES = [
+  { icon: "🎲", title: "Dados d20 reales", text: "El motor tira y resuelve el riesgo con CD, dificultad y heridas. La IA narra el resultado, no lo decide." },
+  { icon: "🧠", title: "Memoria vectorial", text: "Cada escena y hecho se guarda como embedding; los recuerdos lejanos relevantes vuelven al contexto." },
+  { icon: "🧩", title: "Estado con JSON Patch", text: "Salud, inventario, personajes, bestiario y misiones cambian con operaciones auditables y reproducibles." },
+  { icon: "🖼️", title: "Ilustraciones de escena", text: "Los momentos clave se pintan en pixel art con gpt-image-1-mini, una cada pocos turnos." },
+  { icon: "🔊", title: "Narrador por voz", text: "Síntesis de voz del navegador, gratis y sin conexión extra." },
+  { icon: "🔒", title: "Sin servidor", text: "Tu key, tus partidas y tus recuerdos viven en tu navegador. Exporta e importa en JSON." },
+];
 
-export default function Home() {
-  const [gamePhase, setGamePhase] = useState<GamePhase>("menu");
-  const [gameState, setGameState] = useState<GameState | null>(null);
-  const [currentOutput, setCurrentOutput] = useState<
-    | (LLMOutput & {
-        image_base64?: string;
-        mime_type?: string;
-        width?: number;
-        height?: number;
-      })
-    | null
-  >(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [showStateViewer, setShowStateViewer] = useState(false);
-  const [showGameMenu, setShowGameMenu] = useState(false);
-  const [showSaveModal, setShowSaveModal] = useState(false);
-  const [showLoadModal, setShowLoadModal] = useState(false);
-  
-  // Hooks
-  const notifications = useNotifications();
-  const saveSystem = useSaveSystem();
+const PIPELINE = [
+  ["Recordar", "embedding de tu acción → top 5 recuerdos por coseno"],
+  ["Tirar", "d20 sembrado por partida y turno"],
+  ["Narrar", "streaming de salida estructurada con esquema estricto"],
+  ["Aplicar", "delta → JSON Patch → nuevo estado"],
+  ["Memorizar", "escena + hechos → IndexedDB; resumen cada 6 turnos"],
+];
 
-  const handleSetupComplete = (
-    state: GameState,
-    intro: LLMOutput & {
-      image_base64?: string;
-      mime_type?: string;
-      width?: number;
-      height?: number;
-    },
-    newSessionId?: string
-  ) => {
-    setGameState(state);
-    setCurrentOutput(intro);
-    setSessionId(newSessionId || `session-${Date.now()}`);
-    setGamePhase("playing");
-    setShowGameMenu(false);
-  };
+function SavedAdventures() {
+  const [adventures, setAdventures] = useState<Adventure[]>([]);
+  const [confirm, setConfirm] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const file = useRef<HTMLInputElement>(null);
 
-  const handleError = (errorMessage: string) => {
-    notifications.error("Error", errorMessage);
-  };
-
-  const handleGameOver = (finalState: GameState) => {
-    setGameState(finalState);
-    setGamePhase("game-over");
-  };
-
-  const handleNewGame = () => {
-    setGameState(null);
-    setCurrentOutput(null);
-    setSessionId(null);
-    setGamePhase("setup");
-    setShowStateViewer(false);
-    setShowGameMenu(false);
-  };
-  
-  // Handle menu actions
-  const handleMenuAction = useCallback(async (action: GameMenuAction['action']) => {
-    switch (action) {
-      case 'continue':
-        setShowGameMenu(false);
-        break;
-        
-      case 'save':
-        setShowSaveModal(true);
-        break;
-        
-      case 'load':
-        setShowLoadModal(true);
-        break;
-        
-      case 'new-game':
-        handleNewGame();
-        break;
-        
-      case 'exit':
-        setGamePhase("menu");
-        setGameState(null);
-        setCurrentOutput(null);
-        setSessionId(null);
-        setShowGameMenu(false);
-        break;
-        
-      case 'settings':
-        // Settings are handled within GameMenu
-        break;
-    }
-  }, []);
-  
-  // Handle save completion
-  const handleSaveComplete = useCallback((saveId: string, title: string) => {
-    notifications.success("Partida Guardada", `"${title}" se ha guardado correctamente`);
-    setShowSaveModal(false);
-    setShowGameMenu(false);
-  }, [notifications]);
-  
-  // Handle load completion
-  const handleLoadComplete = useCallback((state: GameState, newSessionId: string, intro: LLMOutput) => {
-    setGameState(state);
-    setSessionId(newSessionId);
-    setCurrentOutput(intro);
-    setGamePhase("playing");
-    setShowLoadModal(false);
-    setShowGameMenu(false);
-    
-    const player = state.characters.find(c => c.role === 'player');
-    notifications.success(
-      "Partida Cargada", 
-      `Continuando como ${player?.name || 'Aventurero'} en ${state.scene.location || state.scene.title}`
-    );
-  }, [notifications]);
-  
-  // Handle auto-save
-  const handleAutoSave = useCallback(async (state: GameState, session: string) => {
-    if (saveSystem.shouldAutoSave(state)) {
-      try {
-        await saveSystem.triggerAutoSave(state, session);
-        notifications.autoSave("Auto-guardado", "Progreso guardado automáticamente");
-      } catch (error) {
-        notifications.warning("Error de Auto-guardado", "No se pudo guardar automáticamente");
-      }
-    }
-  }, [saveSystem, notifications]);
-  
-  // Handle game state updates for auto-save
-  const handleGameStateUpdate = useCallback((newState: GameState) => {
-    setGameState(newState);
-    if (sessionId) {
-      handleAutoSave(newState, sessionId);
-    }
-  }, [sessionId, handleAutoSave]);
-  
-  // Keyboard shortcuts
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (gamePhase === "playing") {
-        if (e.key === "Escape") {
-          setShowGameMenu(!showGameMenu);
-        }
-        if (e.ctrlKey && e.key === "s") {
-          e.preventDefault();
-          setShowSaveModal(true);
-        }
-        if (e.ctrlKey && e.key === "o") {
-          e.preventDefault();
-          setShowLoadModal(true);
-        }
-      }
+    const refresh = () => db.listAdventures().then(setAdventures).catch(() => setAdventures([]));
+    refresh();
+    listeners.add(refresh);
+    return () => {
+      listeners.delete(refresh);
     };
-    
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [gamePhase, showGameMenu]);
+  }, []);
+
+  const onImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = event.target.files?.[0];
+    event.target.value = "";
+    if (!picked) return;
+    try {
+      await importBundle(JSON.parse(await picked.text()));
+      setMessage("Partida importada.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No se pudo importar.");
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-adventure">
-      {/* Notification System */}
-      <NotificationSystem 
-        notifications={notifications.notifications}
-        onDismiss={notifications.dismissNotification}
-      />
-
-      {/* Contenido principal */}
-      <div>
-        {gamePhase === "menu" && (
-          <MainMenuScreen 
-            onNewGame={() => setGamePhase("setup")}
-            onLoadGame={() => setShowLoadModal(true)}
-            saveSystem={saveSystem}
-            notifications={notifications}
-          />
-        )}
-        
-        {gamePhase === "setup" && (
-          <GameSetup
-            onSetupComplete={handleSetupComplete}
-            onError={handleError}
-          />
-        )}
-
-        {gamePhase === "playing" && gameState && currentOutput && (
-          <>
-            <GamePlay
-              initialState={gameState}
-              initialOutput={currentOutput}
-              sessionId={sessionId || ""}
-              onError={handleError}
-              onGameOver={handleGameOver}
-              onGameStateUpdate={handleGameStateUpdate}
-              onOpenMenu={() => setShowGameMenu(true)}
-              settings={saveSystem.settings}
-              autoSaveStatus={{
-                isAutoSaving: saveSystem.isAutoSaving,
-                lastAutoSave: saveSystem.lastAutoSave
-              }}
-            />
-            
-            {/* Game Menu */}
-            <GameMenu
-              isOpen={showGameMenu}
-              onClose={() => setShowGameMenu(false)}
-              onAction={handleMenuAction}
-              gameInProgress={true}
-              settings={saveSystem.settings}
-              onSettingsChange={saveSystem.updateSettings}
-            />
-          </>
-        )}
-
-        {gamePhase === "game-over" && gameState && (
-          <div className="min-h-screen flex items-center justify-center p-4">
-            <div className="pixel-card bg-adventure p-8 w-full max-w-2xl text-center">
-              <div className="text-8xl mb-6 animate-treasure-bounce">
-                {gameState.game.ending?.type === "death" && "💀"}
-                {gameState.game.ending?.type === "defeat" && "⚔️"}
-                {gameState.game.ending?.type === "retire" && "🚪"}
-                {gameState.game.ending?.type === "bittersweet" && "🌓"}
-              </div>
-
-              <h1 className="text-4xl font-bold text-mystical text-glow mb-6 text-pixel">
-                {gameState.game.ending?.type === "death" &&
-                  "TU HISTORIA HA LLEGADO A SU FIN"}
-                {gameState.game.ending?.type === "defeat" &&
-                  "HAS SIDO DERROTADO"}
-                {gameState.game.ending?.type === "retire" &&
-                  "DECIDISTE RETIRARTE"}
-                {gameState.game.ending?.type === "bittersweet" &&
-                  "UN FINAL AGRIDULCE"}
-              </h1>
-
-              {gameState.game.ending?.summary && (
-                <div className="pixel-card bg-mystical p-6 mb-6">
-                  <p className="text-adventure text-lg prose">
-                    {gameState.game.ending.summary}
-                  </p>
-                </div>
-              )}
-
-              {gameState.game.ending?.cause && (
-                <p className="text-treasure mb-8 text-pixel italic">
-                  {gameState.game.ending.cause}
-                </p>
-              )}
-
-              <div className="flex gap-4 justify-center">
-                <button
-                  onClick={() => setShowStateViewer(true)}
-                  className="pixel-button pixel-button-primary"
-                >
-                  <span className="text-pixel">VER ESTADO FINAL</span>
-                </button>
-                <button
-                  onClick={handleNewGame}
-                  className="pixel-button pixel-button-success"
-                >
-                  <span className="text-pixel">NUEVA AVENTURA</span>
-                </button>
-                <button
-                  onClick={() => setGamePhase("menu")}
-                  className="pixel-button pixel-button-secondary"
-                >
-                  <span className="text-pixel">MENÚ PRINCIPAL</span>
-                </button>
-              </div>
-
-              <div className="mt-8 pixel-card bg-treasure p-4">
-                <p className="text-pixel text-sm">
-                  <span className="text-mystical-glow">ESTADÍSTICAS:</span>{" "}
-                  {gameState.story_position.turn} TURNOS •{" "}
-                  {gameState.story_position.chapter} CAPÍTULOS
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+    <section className="mx-auto max-w-6xl px-4 py-12" data-testid="saved">
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="label">Tus partidas</p>
+          <h2 className="text-2xl font-semibold">Guardadas en este navegador</h2>
+        </div>
+        <div className="flex gap-2">
+          <input ref={file} type="file" accept="application/json,.json" className="hidden" onChange={onImport} data-testid="import-input" />
+          <button className="btn btn-sm" onClick={() => file.current?.click()}>
+            ⤒ Importar JSON
+          </button>
+        </div>
       </div>
-
-      {/* Modal del estado del juego */}
-      {showStateViewer && gameState && (
-        <GameStateViewer
-          gameState={gameState}
-          isOpen={showStateViewer}
-          onClose={() => setShowStateViewer(false)}
-        />
+      {message && <p className="mb-4 text-sm text-[var(--gold)]">{message}</p>}
+      {adventures.length === 0 ? (
+        <p className="border-2 border-dashed border-[var(--line)] p-6 text-center text-[var(--faint)]">Todavía no empezaste ninguna aventura.</p>
+      ) : (
+        <ul className="grid gap-3 md:grid-cols-2">
+          {adventures.map((a) => (
+            <li key={a.id} className="frame flex flex-wrap items-center gap-3 p-4" data-testid="saved-adventure">
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold">{a.title}</p>
+                <p className="truncate text-sm text-[var(--muted)]">
+                  {a.state.game.over ? "🏁 terminada" : `📍 ${a.state.scene.title}`} · turno {a.state.turn} · ❤ {a.state.player.health}
+                </p>
+              </div>
+              <div className="flex gap-1.5">
+                <Link className="btn btn-sm btn-gold" href={`/play?id=${a.id}`}>
+                  {a.state.game.over ? "Leer" : "Continuar"}
+                </Link>
+                <button className="btn btn-sm" title="Exportar" onClick={async () => downloadJson(`aventra-${fileSlug(a.title)}.json`, await exportBundle(a.id))}>
+                  ⤓
+                </button>
+                {confirm === a.id ? (
+                  <button className="btn btn-sm border-[var(--blood)] text-[var(--blood)]" onClick={() => db.deleteAdventure(a.id)} data-testid="confirm-delete">
+                    ¿Borrar?
+                  </button>
+                ) : (
+                  <button className="btn btn-sm" title="Borrar" onClick={() => setConfirm(a.id)}>
+                    🗑
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
-      
-      {/* Save Game Modal */}
-      {showSaveModal && gameState && sessionId && (
-        <SaveGameModal
-          isOpen={showSaveModal}
-          onClose={() => setShowSaveModal(false)}
-          gameState={gameState}
-          sessionId={sessionId}
-          onSaveComplete={handleSaveComplete}
-          onError={handleError}
-        />
-      )}
-      
-      {/* Load Game Modal */}
-      <LoadGameModal
-        isOpen={showLoadModal}
-        onClose={() => setShowLoadModal(false)}
-        onLoadComplete={handleLoadComplete}
-        onError={handleError}
-      />
-    </div>
+    </section>
   );
 }
 
-// Main Menu Screen Component
-interface MainMenuScreenProps {
-  onNewGame: () => void;
-  onLoadGame: () => void;
-  saveSystem: ReturnType<typeof useSaveSystem>;
-  notifications: ReturnType<typeof useNotifications>;
-}
+export default function Home() {
+  const [demos, setDemos] = useState<DemoMeta[]>([]);
+  useEffect(() => {
+    loadDemoIndex().then(setDemos);
+  }, []);
+  const hero = demos[0];
 
-function MainMenuScreen({ onNewGame, onLoadGame, saveSystem, notifications }: MainMenuScreenProps) {
-  const recentSaves = saveSystem.saves.filter(save => !save.auto_save).slice(0, 3);
-  
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
-      <div className="pixel-card bg-adventure p-8 w-full max-w-2xl text-center">
-        {/* Title */}
-        <div className="mb-12">
-          <h1 className="text-6xl font-bold text-mystical text-glow mb-4 text-pixel">
-            AVENTRA
+    <div>
+      <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-5">
+        <Logo size="sm" />
+        <div className="flex gap-1">
+          <Link className="btn btn-ghost btn-sm" href="/demo">
+            Demo
+          </Link>
+          <a className="btn btn-ghost btn-sm" href="https://github.com/Jimboy78/Aventra" target="_blank" rel="noreferrer">
+            GitHub
+          </a>
+        </div>
+      </nav>
+
+      <header className="mx-auto grid max-w-6xl items-center gap-12 px-4 pb-16 pt-8 lg:grid-cols-[1.1fr_1fr]">
+        <div className="rise">
+          <p className="mb-6 inline-flex items-center gap-2 border-2 border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-sm text-[var(--muted)]">
+            <span className="h-2 w-2 bg-[var(--jade)] shadow-[0_0_10px_var(--jade)]" /> Rol narrativo con IA · 100% en tu navegador
+          </p>
+          <h1 className="mb-6 text-[2.6rem] font-bold leading-[1.05] sm:text-6xl">
+            Una historia que <span className="text-[var(--gold)]">recuerda</span> cada decisión.
           </h1>
-          <p className="text-treasure text-pixel text-lg">
-            Generador de Historias Interactivas con IA
+          <p className="font-story mb-8 max-w-xl text-xl leading-relaxed text-[var(--muted)]">
+            Creas un héroe y un mundo; un narrador de IA dirige la partida con dados reales, un estado que no se contradice y una memoria que trae de vuelta lo
+            que pasó hace veinte turnos.
           </p>
-          <p className="text-adventure text-pixel text-sm opacity-70 mt-2">
-            Crea tu propia aventura épica
-          </p>
-        </div>
-
-        {/* Main Actions */}
-        <div className="space-y-4 mb-8">
-          <button
-            onClick={onNewGame}
-            className="w-full pixel-button pixel-button-primary p-4"
-          >
-            <span className="text-pixel text-xl">🎮 NUEVA AVENTURA</span>
-          </button>
-          
-          <button
-            onClick={onLoadGame}
-            disabled={saveSystem.saves.length === 0}
-            className="w-full pixel-button pixel-button-secondary p-4"
-          >
-            <span className="text-pixel text-xl">
-              📂 CARGAR PARTIDA {saveSystem.saves.length > 0 && `(${saveSystem.saves.length})`}
-            </span>
-          </button>
-        </div>
-
-        {/* Recent Saves */}
-        {recentSaves.length > 0 && (
-          <div className="pixel-card bg-mystical p-6">
-            <h3 className="text-pixel font-bold text-treasure mb-4">PARTIDAS RECIENTES</h3>
-            <div className="space-y-2">
-              {recentSaves.map((save) => (
-                <div key={save.save_id} className="flex items-center justify-between p-2 bg-adventure rounded">
-                  <div className="text-left">
-                    <p className="text-pixel font-medium text-sm">{save.title}</p>
-                    <p className="text-pixel text-xs opacity-70">Cap. {save.chapter} • {save.location}</p>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      try {
-                        const result = await saveSystem.loadGame(save.save_id);
-                        if (result) {
-                          // This would trigger the load in the parent component
-                          onLoadGame();
-                        }
-                      } catch (error) {
-                        notifications.error("Error", "No se pudo cargar la partida");
-                      }
-                    }}
-                    className="pixel-button pixel-button-primary text-xs px-3 py-1"
-                  >
-                    <span className="text-pixel">Cargar</span>
-                  </button>
-                </div>
-              ))}
-            </div>
+          <div className="flex flex-wrap gap-3">
+            <Link className="btn btn-gold px-6 py-3.5 text-lg" href="/new" data-testid="cta-new">
+              ✦ Nueva aventura
+            </Link>
+            <Link className="btn px-6 py-3.5 text-lg" href={hero ? `/demo?s=${hero.slug}` : "/demo"} data-testid="cta-demo">
+              ▶ Ver una partida real
+            </Link>
           </div>
-        )}
-
-        {/* Footer */}
-        <div className="mt-8 text-center">
-          <p className="text-pixel text-xs text-adventure opacity-50">
-            v1.0.0 • Powered by OpenAI GPT
-          </p>
+          <p className="mt-4 text-sm text-[var(--faint)]">La demo no necesita key. Para jugar usas tu propia key de OpenAI: nunca pasa por un servidor nuestro.</p>
         </div>
-      </div>
+
+        <div className="relative">
+          {hero?.cover ? (
+            <Link href={`/demo?s=${hero.slug}`} className="frame frame-gold corners float block p-2" data-testid="hero-demo">
+              {/* eslint-disable-next-line @next/next/no-img-element -- static demo cover */}
+              <img src={hero.cover} alt={`Ilustración de ${hero.title}`} className="aspect-[3/2] w-full object-cover" />
+              <div className="p-4">
+                <p className="font-pixel mb-2 text-[0.55rem] text-[var(--gold)]">{hero.world.toUpperCase()}</p>
+                <p className="font-story line-clamp-3 text-lg italic text-[#e9e1d2]">“{hero.excerpt}”</p>
+              </div>
+            </Link>
+          ) : (
+            <div className="grid place-items-center py-16">
+              <Logo size="xl" />
+            </div>
+          )}
+        </div>
+      </header>
+
+      <section className="mx-auto max-w-6xl px-4 py-12">
+        <p className="label">Qué lo hace distinto</p>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {FEATURES.map((feature) => (
+            <div key={feature.title} className="frame p-5">
+              <p className="mb-3 text-3xl">{feature.icon}</p>
+              <h3 className="mb-2 text-lg font-semibold">{feature.title}</h3>
+              <p className="text-[var(--muted)]">{feature.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-6xl px-4 py-12">
+        <p className="label">Anatomía de un turno</p>
+        <ol className="grid gap-3 md:grid-cols-5">
+          {PIPELINE.map(([title, text], i) => (
+            <li key={title} className="relative border-2 border-[var(--line)] bg-[var(--panel)] p-4">
+              <span className="font-pixel text-[0.6rem] text-[var(--ember)]">0{i + 1}</span>
+              <p className="mt-2 font-semibold">{title}</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">{text}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {demos.length > 0 && (
+        <section className="mx-auto max-w-6xl px-4 py-12">
+          <p className="label">Demos</p>
+          <h2 className="mb-5 text-2xl font-semibold">Partidas grabadas con el motor real</h2>
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {demos.map((demo) => (
+              <DemoCard key={demo.slug} demo={demo} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <SavedAdventures />
+
+      <footer className="mx-auto max-w-6xl border-t-2 border-[var(--line)] px-4 py-8 text-sm text-[var(--faint)]">
+        Aventra · Next.js, AI SDK, OpenAI, IndexedDB · <a className="hover:text-[var(--muted)]" href="https://github.com/Jimboy78/Aventra">código fuente</a>
+      </footer>
     </div>
   );
 }

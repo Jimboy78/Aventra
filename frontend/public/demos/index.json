@@ -1,0 +1,42 @@
+{
+  "demos": [
+    {
+      "slug": "reinos-de-ceniza",
+      "title": "Lyra Venn · Reinos de Ceniza",
+      "world": "Reinos de Ceniza",
+      "genre": "Fantasía oscura",
+      "hero": "Lyra Venn, elfa maga",
+      "turns": 12,
+      "chapters": 2,
+      "ending": "retire",
+      "cover": "/demos/reinos-de-ceniza-cover.webp",
+      "excerpt": "Despiertas en el umbral de una mina abandonada, las paredes de roca ennegrecida por cenizas recientes que aún se elevan en el aire, formando una neblina grisácea que te envuelve. El anillo de plata que heredaste de tu madre brilla tenuemente en tu dedo, pulsando con un eco mágico que parece responder a la antigua energía que aún reside en estas profundidades.",
+      "palette": [
+        "#f97316",
+        "#7c3aed"
+      ],
+      "model": "gpt-4.1-mini",
+      "images": 4,
+      "memories": 33
+    },
+    {
+      "slug": "neon-caido",
+      "title": "Kael Duarte · Neón Caído",
+      "world": "Neón Caído",
+      "genre": "Ciberpunk",
+      "hero": "Kael Duarte, humano hacker",
+      "turns": 12,
+      "chapters": 2,
+      "ending": "retire",
+      "cover": "/demos/neon-caido-cover.webp",
+      "excerpt": "La lluvia golpea incesante sobre los cristales sucios del apartamento, filtrando destellos de neón que mueren en charcos de sombra. Frente a ti, una consola parpadea con datos incompletos: tu último acceso a la red, un fragmento de memoria borrada, un eco del chip que nunca dejas de revisar.",
+      "palette": [
+        "#ec4899",
+        "#06b6d4"
+      ],
+      "model": "gpt-4.1-mini",
+      "images": 4,
+      "memories": 33
+    }
+  ]
+}

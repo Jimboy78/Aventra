@@ -1,21 +1,21 @@
 {
-  "name": "frontend",
-  "version": "0.1.0",
+  "name": "aventra",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build --turbopack",
+    "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^2.0.27",
-    "@ai-sdk/react": "^2.0.37",
-    "ai": "^5.0.37",
-    "next": "15.5.2",
+    "@ai-sdk/openai": "^2.0.127",
+    "ai": "^5.0.258",
+    "next": "15.5.25",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -24,7 +24,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.5.2",
+    "eslint-config-next": "15.5.25",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
