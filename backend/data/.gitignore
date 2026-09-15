@@ -1,0 +1,16 @@
+# ChromaDB data files
+chroma/
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+
+# Save system (do not commit player saves or backups)
+saves/
+saves/**
+!saves/.gitkeep
+saves/backups/
+saves/metadata/
